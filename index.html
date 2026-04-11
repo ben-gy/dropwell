@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#050914" />
+
+    <title>Dropwell — encrypted P2P file sharing</title>
+    <meta
+      name="description"
+      content="Drop a file, get a link. End-to-end encrypted, peer-to-peer, no backend. Your file never touches a server."
+    />
+
+    <!-- Open Graph / social preview -->
+    <meta property="og:title" content="Dropwell — encrypted P2P file sharing" />
+    <meta
+      property="og:description"
+      content="Drop a file, get a link. End-to-end encrypted, peer-to-peer, no backend."
+    />
+    <meta property="og:type" content="website" />
+
+    <!-- Security: CSP tuned to allow only self + WebTorrent trackers + WebRTC -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: ws: https:; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none';"
+    />
+
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="/">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <defs>
+            <linearGradient id="dw-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#4cc8ff" />
+              <stop offset="100%" stop-color="#1d5dff" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M16 2 L27 14 A13 13 0 1 1 5 14 Z"
+            fill="url(#dw-grad)"
+            stroke="#9fe3ff"
+            stroke-width="1.2"
+          />
+          <circle cx="16" cy="19" r="3" fill="#050914" />
+        </svg>
+        <span class="brand-name">
+          drop<span class="brand-name-accent">well</span>
+        </span>
+      </a>
+      <nav class="site-nav">
+        <a href="#how-it-works">how it works</a>
+        <a href="#security">security</a>
+        <a
+          href="https://github.com/ben-gy/dropwell"
+          target="_blank"
+          rel="noopener noreferrer"
+          >source</a
+        >
+      </nav>
+    </header>
+
+    <main id="app">
+      <!-- main app region is populated by src/main.ts -->
+    </main>
+
+    <section class="explainer" id="how-it-works">
+      <h2>how it works</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-num">01</span>
+          <div>
+            <h3>drop a file</h3>
+            <p>
+              Your browser generates a fresh 256-bit AES-GCM key using the
+              Web Crypto API. The key lives only in this tab's memory.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">02</span>
+          <div>
+            <h3>encrypt locally</h3>
+            <p>
+              The file is encrypted in-browser. The ciphertext — not the
+              original file — is what gets shared. Filename and contents are
+              both inside the encrypted blob.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">03</span>
+          <div>
+            <h3>seed over webrtc</h3>
+            <p>
+              WebTorrent seeds the encrypted blob from your tab directly to
+              recipients using WebRTC data channels. No file ever hits a
+              server.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">04</span>
+          <div>
+            <h3>share the link</h3>
+            <p>
+              You get a link containing the magnet URI and the decryption key
+              — after the <code>#</code>. Browsers never send anything after
+              <code>#</code> over the network, so the key can't leak to GitHub
+              Pages, DNS, or any proxy.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">05</span>
+          <div>
+            <h3>receiver decrypts</h3>
+            <p>
+              The recipient opens the link, joins the swarm, downloads the
+              ciphertext peer-to-peer, and decrypts it in their browser with
+              the key from the fragment. Original filename is recovered.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="explainer" id="security">
+      <h2>threat model</h2>
+      <div class="security-grid">
+        <div class="security-card good">
+          <h3>what's protected</h3>
+          <ul>
+            <li>File contents — AES-GCM-256 authenticated encryption</li>
+            <li>Original filename — bundled inside the ciphertext</li>
+            <li>
+              The decryption key — generated in-browser and only ever placed
+              in the URL fragment (never sent over HTTP)
+            </li>
+          </ul>
+        </div>
+        <div class="security-card bad">
+          <h3>what isn't</h3>
+          <ul>
+            <li>
+              Encrypted file size (visible to peers and trackers — BitTorrent
+              design)
+            </li>
+            <li>The IP addresses of you and your recipient (visible to the
+              swarm)</li>
+            <li>
+              That <em>a</em> transfer happened at all — WebRTC trackers see
+              the infohash
+            </li>
+          </ul>
+        </div>
+        <div class="security-card">
+          <h3>trust model</h3>
+          <ul>
+            <li>Sender and receiver must trust each other</li>
+            <li>The link <em>is</em> the secret — anyone with the full link can decrypt</li>
+            <li>Tracker servers see infohashes, not contents or keys</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer class="site-footer">
+      <p>
+        dropwell · zero backend · zero tracking ·
+        <a
+          href="https://github.com/ben-gy/dropwell"
+          target="_blank"
+          rel="noopener noreferrer"
+          >github</a
+        >
+      </p>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

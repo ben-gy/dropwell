@@ -1,0 +1,24 @@
+{
+  "name": "dropwell",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "End-to-end encrypted peer-to-peer file sharing in the browser. No backend, no installs.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "webtorrent": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}
