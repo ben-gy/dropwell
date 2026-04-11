@@ -25,6 +25,7 @@ import {
   formatSeconds,
   h,
   icon,
+  initModalTriggers,
   mount,
   toast,
 } from './ui';
@@ -33,6 +34,8 @@ import {
 
 const app = mount();
 const client = createClient();
+
+initModalTriggers();
 
 window.addEventListener('beforeunload', () => destroyClient(client));
 

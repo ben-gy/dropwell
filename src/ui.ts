@@ -116,6 +116,62 @@ export function createLog(container: HTMLElement): {
   return { log };
 }
 
+// ---------- modal ----------
+
+/**
+ * Opens a modal overlay containing the given fragment/element.
+ * Closes on backdrop click, × button, or Escape.
+ */
+export function openModal(content: DocumentFragment | HTMLElement): void {
+  const closeBtn = h('button', { class: 'modal-close', type: 'button', 'aria-label': 'close' }, '×');
+  const panel = h('div', { class: 'modal-panel', role: 'document' }, closeBtn);
+  panel.appendChild(content as unknown as Node);
+  const overlay = h(
+    'div',
+    { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true' },
+    panel,
+  );
+
+  const previouslyFocused = document.activeElement as HTMLElement | null;
+  document.body.appendChild(overlay);
+  document.body.classList.add('modal-open');
+
+  const close = () => {
+    overlay.remove();
+    document.body.classList.remove('modal-open');
+    document.removeEventListener('keydown', onKey);
+    previouslyFocused?.focus?.();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+  };
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  closeBtn.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+
+  requestAnimationFrame(() => closeBtn.focus());
+}
+
+/** Wires up every [data-modal="tmpl-id"] trigger on the page to open the named <template>. */
+export function initModalTriggers(): void {
+  document.querySelectorAll<HTMLElement>('[data-modal]').forEach((trigger) => {
+    trigger.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = trigger.dataset.modal;
+      if (!id) return;
+      const tmpl = document.getElementById(id) as HTMLTemplateElement | null;
+      if (!tmpl) return;
+      openModal(tmpl.content.cloneNode(true) as DocumentFragment);
+    });
+  });
+}
+
 export function mount(): HTMLElement {
   const el = document.getElementById('app');
   if (!el) throw new Error('#app not found');

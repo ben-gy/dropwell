@@ -42,20 +42,20 @@
             </linearGradient>
           </defs>
           <path
-            d="M16 2 L27 14 A13 13 0 1 1 5 14 Z"
+            d="M16 4 Q25 13 25 19 A9 9 0 1 1 7 19 Q7 13 16 4 Z"
             fill="url(#dw-grad)"
             stroke="#9fe3ff"
             stroke-width="1.2"
           />
-          <circle cx="16" cy="19" r="3" fill="#050914" />
+          <circle cx="16" cy="20" r="2.5" fill="#050914" />
         </svg>
         <span class="brand-name">
           drop<span class="brand-name-accent">well</span>
         </span>
       </a>
       <nav class="site-nav">
-        <a href="#how-it-works">how it works</a>
-        <a href="#security">security</a>
+        <button type="button" class="nav-link" data-modal="tmpl-how-it-works">how it works</button>
+        <button type="button" class="nav-link" data-modal="tmpl-security">security</button>
         <a
           href="https://github.com/ben-gy/dropwell"
           target="_blank"
@@ -69,106 +69,110 @@
       <!-- main app region is populated by src/main.ts -->
     </main>
 
-    <section class="explainer" id="how-it-works">
-      <h2>how it works</h2>
-      <ol class="steps">
-        <li>
-          <span class="step-num">01</span>
-          <div>
-            <h3>drop a file</h3>
-            <p>
-              Your browser generates a fresh 256-bit AES-GCM key using the
-              Web Crypto API. The key lives only in this tab's memory.
-            </p>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">02</span>
-          <div>
-            <h3>encrypt locally</h3>
-            <p>
-              The file is encrypted in-browser. The ciphertext — not the
-              original file — is what gets shared. Filename and contents are
-              both inside the encrypted blob.
-            </p>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">03</span>
-          <div>
-            <h3>seed over webrtc</h3>
-            <p>
-              WebTorrent seeds the encrypted blob from your tab directly to
-              recipients using WebRTC data channels. No file ever hits a
-              server.
-            </p>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">04</span>
-          <div>
-            <h3>share the link</h3>
-            <p>
-              You get a link containing the magnet URI and the decryption key
-              — after the <code>#</code>. Browsers never send anything after
-              <code>#</code> over the network, so the key can't leak to GitHub
-              Pages, DNS, or any proxy.
-            </p>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">05</span>
-          <div>
-            <h3>receiver decrypts</h3>
-            <p>
-              The recipient opens the link, joins the swarm, downloads the
-              ciphertext peer-to-peer, and decrypts it in their browser with
-              the key from the fragment. Original filename is recovered.
-            </p>
-          </div>
-        </li>
-      </ol>
-    </section>
+    <template id="tmpl-how-it-works">
+      <div class="modal-content">
+        <h2 class="modal-title">how it works</h2>
+        <ol class="steps">
+          <li>
+            <span class="step-num">01</span>
+            <div>
+              <h3>drop a file</h3>
+              <p>
+                Your browser generates a fresh 256-bit AES-GCM key using the
+                Web Crypto API. The key lives only in this tab's memory.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">02</span>
+            <div>
+              <h3>encrypt locally</h3>
+              <p>
+                The file is encrypted in-browser. The ciphertext — not the
+                original file — is what gets shared. Filename and contents are
+                both inside the encrypted blob.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">03</span>
+            <div>
+              <h3>seed over webrtc</h3>
+              <p>
+                WebTorrent seeds the encrypted blob from your tab directly to
+                recipients using WebRTC data channels. No file ever hits a
+                server.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">04</span>
+            <div>
+              <h3>share the link</h3>
+              <p>
+                You get a link containing the magnet URI and the decryption key
+                — after the <code>#</code>. Browsers never send anything after
+                <code>#</code> over the network, so the key can't leak to GitHub
+                Pages, DNS, or any proxy.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">05</span>
+            <div>
+              <h3>receiver decrypts</h3>
+              <p>
+                The recipient opens the link, joins the swarm, downloads the
+                ciphertext peer-to-peer, and decrypts it in their browser with
+                the key from the fragment. Original filename is recovered.
+              </p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </template>
 
-    <section class="explainer" id="security">
-      <h2>threat model</h2>
-      <div class="security-grid">
-        <div class="security-card good">
-          <h3>what's protected</h3>
-          <ul>
-            <li>File contents — AES-GCM-256 authenticated encryption</li>
-            <li>Original filename — bundled inside the ciphertext</li>
-            <li>
-              The decryption key — generated in-browser and only ever placed
-              in the URL fragment (never sent over HTTP)
-            </li>
-          </ul>
-        </div>
-        <div class="security-card bad">
-          <h3>what isn't</h3>
-          <ul>
-            <li>
-              Encrypted file size (visible to peers and trackers — BitTorrent
-              design)
-            </li>
-            <li>The IP addresses of you and your recipient (visible to the
-              swarm)</li>
-            <li>
-              That <em>a</em> transfer happened at all — WebRTC trackers see
-              the infohash
-            </li>
-          </ul>
-        </div>
-        <div class="security-card">
-          <h3>trust model</h3>
-          <ul>
-            <li>Sender and receiver must trust each other</li>
-            <li>The link <em>is</em> the secret — anyone with the full link can decrypt</li>
-            <li>Tracker servers see infohashes, not contents or keys</li>
-          </ul>
+    <template id="tmpl-security">
+      <div class="modal-content">
+        <h2 class="modal-title">threat model</h2>
+        <div class="security-grid">
+          <div class="security-card good">
+            <h3>what's protected</h3>
+            <ul>
+              <li>File contents — AES-GCM-256 authenticated encryption</li>
+              <li>Original filename — bundled inside the ciphertext</li>
+              <li>
+                The decryption key — generated in-browser and only ever placed
+                in the URL fragment (never sent over HTTP)
+              </li>
+            </ul>
+          </div>
+          <div class="security-card bad">
+            <h3>what isn't</h3>
+            <ul>
+              <li>
+                Encrypted file size (visible to peers and trackers — BitTorrent
+                design)
+              </li>
+              <li>The IP addresses of you and your recipient (visible to the
+                swarm)</li>
+              <li>
+                That <em>a</em> transfer happened at all — WebRTC trackers see
+                the infohash
+              </li>
+            </ul>
+          </div>
+          <div class="security-card">
+            <h3>trust model</h3>
+            <ul>
+              <li>Sender and receiver must trust each other</li>
+              <li>The link <em>is</em> the secret — anyone with the full link can decrypt</li>
+              <li>Tracker servers see infohashes, not contents or keys</li>
+            </ul>
+          </div>
         </div>
       </div>
-    </section>
+    </template>
 
     <footer class="site-footer">
       <p>
