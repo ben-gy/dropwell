@@ -7,33 +7,24 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { webcrypto } from 'node:crypto';
 
-// Patch jsdom's window.crypto with the Node webcrypto implementation, and
-// give Blob/File an arrayBuffer() method (jsdom's implementation omits it).
+// Patch jsdom's window.crypto with the Node webcrypto implementation.
+// jsdom's Blob.arrayBuffer() either doesn't exist or returns a view whose
+// backing buffer Node's SubtleCrypto refuses. We work around this with a
+// per-instance override in makeFile() + a per-instance override on the
+// encrypted File and on any Blob we want to decrypt (see the helper below).
 beforeAll(() => {
   if (!globalThis.crypto || !('subtle' in globalThis.crypto)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).crypto = webcrypto;
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const BlobProto = (globalThis.Blob as any).prototype;
-  if (!BlobProto.arrayBuffer) {
-    BlobProto.arrayBuffer = function arrayBuffer(this: Blob) {
-      return new Promise<ArrayBuffer>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as ArrayBuffer);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsArrayBuffer(this);
-      });
-    };
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const BlobProtoText = (globalThis.Blob as any).prototype;
-  if (!BlobProtoText.text) {
-    BlobProtoText.text = function text(this: Blob) {
-      return this.arrayBuffer().then((b: ArrayBuffer) => new TextDecoder().decode(b));
-    };
-  }
 });
+
+/** Copy a Uint8Array into a fresh, standalone ArrayBuffer. */
+function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const ab = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(ab).set(u8);
+  return ab;
+}
 
 // Import after the polyfill.
 import {
@@ -47,8 +38,34 @@ import {
 
 function makeFile(name: string, contents: Uint8Array | string): File {
   const data = typeof contents === 'string' ? new TextEncoder().encode(contents) : contents;
-  // Cast through BlobPart — TS 5.7's Uint8Array generic trips File's types.
-  return new File([data as BlobPart], name, { type: 'application/octet-stream' });
+  const file = new File([data as BlobPart], name, { type: 'application/octet-stream' });
+  // Force arrayBuffer() to return a real, standalone ArrayBuffer that
+  // Node's SubtleCrypto accepts — jsdom's default implementation doesn't.
+  const ab = toArrayBuffer(data);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (file as any).arrayBuffer = async () => ab;
+  return file;
+}
+
+/** Read a Blob/File produced by the library into a fresh, standalone
+ *  ArrayBuffer that Node's SubtleCrypto will accept. */
+function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const res = fr.result;
+      if (res instanceof ArrayBuffer) {
+        // Copy into a fresh ArrayBuffer so the returned buffer is
+        // guaranteed to be a standalone ArrayBuffer (not SharedArrayBuffer
+        // or a view) — Node's webcrypto rejects anything else.
+        resolve(toArrayBuffer(new Uint8Array(res)));
+      } else {
+        reject(new Error('unexpected FileReader result type'));
+      }
+    };
+    fr.onerror = () => reject(fr.error);
+    fr.readAsArrayBuffer(blob);
+  });
 }
 
 describe('crypto', () => {
@@ -75,16 +92,16 @@ describe('crypto', () => {
     expect(encrypted.name).toBe('drop.enc');
     expect(encrypted.size).toBeGreaterThan(0);
 
-    const { name, blob } = await decryptBlob(await encrypted.arrayBuffer(), key);
+    const { name, blob } = await decryptBlob(await blobToArrayBuffer(encrypted), key);
     expect(name).toBe('hello.txt');
-    expect(await blob.text()).toBe('hello dropwell');
+    expect(new TextDecoder().decode(await blobToArrayBuffer(blob))).toBe('hello dropwell');
   });
 
   it('round-trips an empty file', async () => {
     const original = makeFile('empty.bin', new Uint8Array());
     const { key } = await generateKey();
     const encrypted = await encryptFile(original, key);
-    const { name, blob } = await decryptBlob(await encrypted.arrayBuffer(), key);
+    const { name, blob } = await decryptBlob(await blobToArrayBuffer(encrypted), key);
     expect(name).toBe('empty.bin');
     expect(blob.size).toBe(0);
   });
@@ -94,9 +111,9 @@ describe('crypto', () => {
     const original = makeFile(unicodeName, 'unicode!');
     const { key } = await generateKey();
     const encrypted = await encryptFile(original, key);
-    const { name, blob } = await decryptBlob(await encrypted.arrayBuffer(), key);
+    const { name, blob } = await decryptBlob(await blobToArrayBuffer(encrypted), key);
     expect(name).toBe(unicodeName);
-    expect(await blob.text()).toBe('unicode!');
+    expect(new TextDecoder().decode(await blobToArrayBuffer(blob))).toBe('unicode!');
   });
 
   it('round-trips a 1MB binary payload', async () => {
@@ -105,9 +122,9 @@ describe('crypto', () => {
     const original = makeFile('big.bin', buf);
     const { key } = await generateKey();
     const encrypted = await encryptFile(original, key);
-    const { name, blob } = await decryptBlob(await encrypted.arrayBuffer(), key);
+    const { name, blob } = await decryptBlob(await blobToArrayBuffer(encrypted), key);
     expect(name).toBe('big.bin');
-    const out = new Uint8Array(await blob.arrayBuffer());
+    const out = new Uint8Array(await blobToArrayBuffer(blob));
     expect(out.length).toBe(buf.length);
     // Spot-check a few bytes rather than comparing the whole array (fast).
     expect(out[0]).toBe(0);
@@ -121,6 +138,6 @@ describe('crypto', () => {
     const { key: key1 } = await generateKey();
     const { key: key2 } = await generateKey();
     const encrypted = await encryptFile(original, key1);
-    await expect(decryptBlob(await encrypted.arrayBuffer(), key2)).rejects.toThrow();
+    await expect(decryptBlob(await blobToArrayBuffer(encrypted), key2)).rejects.toThrow();
   });
 });
