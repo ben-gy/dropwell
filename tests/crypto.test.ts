@@ -19,7 +19,8 @@ import {
 
 function makeFile(name: string, contents: Uint8Array | string): File {
   const data = typeof contents === 'string' ? new TextEncoder().encode(contents) : contents;
-  return new File([data], name, { type: 'application/octet-stream' });
+  // Cast — TS 5.7's stricter Uint8Array<ArrayBufferLike> generic trips File().
+  return new File([data as BlobPart], name, { type: 'application/octet-stream' });
 }
 
 describe('crypto', () => {
