@@ -131,8 +131,11 @@ if (share) {
 
 function renderIdle(): void {
   clear(app);
+  app.classList.remove('scrollable');
   setStatus('idle', 'idle');
   logEvent('ui', 'info', 'render: idle');
+
+  const shell = h('div', { class: 'idle-shell' });
 
   const hero = h(
     'div',
@@ -209,9 +212,10 @@ function renderIdle(): void {
     featurePill('info', 'zero backend / zero tracking'),
   );
 
-  app.appendChild(hero);
-  app.appendChild(dropzone);
-  app.appendChild(features);
+  shell.appendChild(hero);
+  shell.appendChild(dropzone);
+  shell.appendChild(features);
+  app.appendChild(shell);
 }
 
 async function handleFile(file: File): Promise<void> {
@@ -256,26 +260,27 @@ async function handleFile(file: File): Promise<void> {
 
 function renderEncrypting(file: File): void {
   clear(app);
+  app.classList.add('scrollable');
 
-  const sec = h(
-    'section',
-    {},
-    sectionHeader('encrypting locally', 'aes-gcm-256'),
-    fileMeta(file),
-    h('div', { class: 'progress progress-indeterminate' }, h('div', { class: 'progress-fill' })),
-    h(
-      'div',
-      { class: 'alert alert-info', style: 'margin-top:14px' },
-      icon('lock', 'icon'),
+  app.appendChild(
+    panel(
+      'encrypting',
+      'aes-gcm-256',
       h(
-        'p',
-        {},
-        h('strong', {}, 'encrypting · '),
-        'Generating a fresh AES-GCM-256 key in your browser and encrypting the file. The key will only ever live in this tab and in the URL fragment.',
+        'div',
+        { class: 'session-row' },
+        icon('lock', 'file-icon'),
+        h('div', { class: 'file-name' }, file.name),
+        h('span', { class: 'sep' }, '·'),
+        h('div', { class: 'file-size' }, formatBytes(file.size)),
+      ),
+      h(
+        'div',
+        { style: 'margin-top:8px' },
+        h('div', { class: 'progress progress-indeterminate' }, h('div', { class: 'progress-fill' })),
       ),
     ),
   );
-  app.appendChild(sec);
 }
 
 // ====================================================================
@@ -284,11 +289,12 @@ function renderEncrypting(file: File): void {
 
 async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: string): Promise<void> {
   clear(app);
+  app.classList.remove('scrollable');
   setStatus('warn', 'seeding');
   setStatusMode('seed');
   lockUnload('seeding active — closing the tab will tear down the swarm');
 
-  // Live red warning at the top
+  // Slim red warning strip
   const liveAlert = h(
     'div',
     { class: 'live-alert', role: 'alert' },
@@ -296,48 +302,42 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
     h(
       'div',
       { class: 'body' },
-      h('strong', {}, '⚠ keep this tab open'),
+      h('strong', {}, '⚠ keep tab open'),
       h(
         'span',
-        {},
-        'your browser is the seed — closing this tab tears down the swarm and the link goes dark instantly.',
+        { class: 'note' },
+        'closing tears down the swarm — link goes dark instantly',
       ),
     ),
   );
 
-  // Section: identity
-  const idHead = sectionHeader('drop session', `key ${fingerprint(keyHex)}`);
-  const idMeta = fileMeta(originalFile);
+  // ----- LEFT COL PANELS -----
 
-  // Section: share link
+  // Session panel: file row + share row in one panel
   const linkInput = h('input', {
     type: 'text',
     readonly: '',
     value: 'starting webtorrent swarm…',
     'aria-label': 'Share URL',
   }) as HTMLInputElement;
-  const copyBtn = h('button', { class: 'primary', disabled: '' }, 'copy link');
-  const shareBtn = h('button', { class: 'ghost', disabled: '' }, 'share');
-  const newBtn = h('button', { class: 'ghost' }, 'drop another');
+  const copyBtn = h('button', { class: 'primary', disabled: '' }, 'copy');
+  const newBtn = h('button', { class: 'ghost' }, 'new');
 
-  const linkCard = h(
-    'section',
-    {},
-    sectionHeader('share link', 'fragment never leaves the browser'),
-    h('div', { class: 'share-url' }, linkInput, copyBtn),
-    h('div', { class: 'btn-row', style: 'margin-top:10px' }, shareBtn, newBtn),
+  const sessionPanel = panel(
+    'session',
+    `key ${fingerprint(keyHex)}`,
+    h(
+      'div',
+      { class: 'session-row' },
+      icon('file', 'file-icon'),
+      h('div', { class: 'file-name' }, originalFile.name),
+      h('span', { class: 'sep' }, '·'),
+      h('div', { class: 'file-size' }, formatBytes(originalFile.size)),
+    ),
+    h('div', { class: 'share-row' }, linkInput, copyBtn, newBtn),
   );
 
-  // Section: live network viz
-  const viz = createNetworkViz();
-  const netSection = h(
-    'section',
-    { style: 'margin-top:14px' },
-    sectionHeader('live network topology', 'browser ↔ trackers ↔ peers'),
-    viz.el,
-  );
-
-  // Section: stats
+  // Stats panel
   const downStat = kvCell('down', '0 B/s');
   const upStat = kvCell('up', '0 B/s');
   const peerStat = kvCell('peers', '0');
@@ -355,19 +355,28 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
     uploadedStat,
     elapsedStat,
   );
+  const statsPanel = panel('metrics', 'realtime', statsGrid, { flush: true });
 
-  const statsSection = h(
-    'section',
-    { style: 'margin-top:14px' },
-    sectionHeader('live transfer metrics', 'realtime'),
-    statsGrid,
+  // Peers list panel — fills remaining left col space
+  const peerList = h('div', { class: 'peer-list' });
+  const peersPanel = panel('peers', '0 connected', peerList, { flush: true, fill: true });
+
+  // ----- RIGHT COL PANEL -----
+
+  const viz = createNetworkViz();
+  const netPanel = panel('topology', 'self ↔ trackers ↔ peers', viz.el, { flush: true, fill: true });
+
+  const workspace = h(
+    'div',
+    { class: 'workspace' },
+    h('div', { class: 'col left' }, sessionPanel, statsPanel, peersPanel),
+    h('div', { class: 'col right' }, netPanel),
   );
 
   app.appendChild(liveAlert);
-  app.appendChild(h('section', {}, idHead, idMeta));
-  app.appendChild(linkCard);
-  app.appendChild(netSection);
-  app.appendChild(statsSection);
+  app.appendChild(workspace);
+
+  renderPeerList(peerList, []);
 
   const startedAt = Date.now();
 
@@ -425,6 +434,9 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
           });
         }
       }
+      renderPeerList(peerList, peers);
+      const meta = peersPanel.querySelector('.panel-head .meta');
+      if (meta) meta.textContent = `${peers.length} connected`;
       viz.update({
         mode: 'send',
         trackers: lastTrackers,
@@ -484,23 +496,6 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
     }
   });
 
-  if ('share' in navigator) {
-    shareBtn.removeAttribute('disabled');
-    shareBtn.addEventListener('click', async () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (navigator as any).share({
-          title: 'Dropwell',
-          text: 'Encrypted file drop',
-          url: shareUrl,
-        });
-        logEvent('ui', 'ok', 'share sheet invoked');
-      } catch {
-        /* user cancelled */
-      }
-    });
-  }
-
   newBtn.addEventListener('click', () => {
     window.open(window.location.origin + window.location.pathname, '_blank');
     logEvent('ui', 'info', 'opening new tab for fresh drop');
@@ -509,6 +504,7 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
 
 function renderSendError(msg: string): void {
   clear(app);
+  app.classList.add('scrollable');
   unlockUnload();
   setStatus('bad', 'error');
   app.appendChild(
@@ -538,6 +534,7 @@ function renderSendError(msg: string): void {
 
 async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
   clear(app);
+  app.classList.remove('scrollable');
   setStatus('warn', 'receiving');
   setStatusMode('receive');
   lockUnload('receive in progress — closing tab abandons the transfer');
@@ -547,33 +544,35 @@ async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
   });
   logEvent('crypto', 'info', 'key fingerprint loaded', { fp: fingerprint(keyHex) });
 
-  const idHead = sectionHeader('incoming drop', `key ${fingerprint(keyHex)}`);
-
-  const progressBar = h('div', { class: 'progress' }, h('div', { class: 'progress-fill' }));
-  const progressSection = h(
-    'section',
-    {},
-    idHead,
+  // Slim red warning strip — recipient
+  const liveAlert = h(
+    'div',
+    { class: 'live-alert', role: 'alert' },
+    h('span', { class: 'pulse' }),
     h(
       'div',
-      { class: 'alert alert-info', style: 'margin-bottom:14px' },
-      icon('info', 'icon'),
+      { class: 'body' },
+      h('strong', {}, '⚠ keep tab open'),
       h(
-        'p',
-        {},
-        h('strong', {}, 'connecting · '),
-        'streaming ciphertext peer-to-peer over WebRTC. Decryption happens in this browser, never on a server.',
+        'span',
+        { class: 'note' },
+        'closing aborts the transfer — restart from the share link',
       ),
     ),
-    progressBar,
   );
 
-  const viz = createNetworkViz();
-  const netSection = h(
-    'section',
-    { style: 'margin-top:14px' },
-    sectionHeader('live network topology', 'browser ↔ trackers ↔ peers'),
-    viz.el,
+  // ----- LEFT COL -----
+  const progressBar = h('div', { class: 'progress' }, h('div', { class: 'progress-fill' }));
+  const sessionPanel = panel(
+    'incoming',
+    `key ${fingerprint(keyHex)}`,
+    h(
+      'div',
+      { class: 'session-row' },
+      icon('download', 'file-icon'),
+      h('div', { class: 'file-name' }, 'streaming ciphertext over webrtc…'),
+    ),
+    h('div', { style: 'margin-top:6px' }, progressBar),
   );
 
   const pctStat = kvCell('progress', '0%');
@@ -592,16 +591,27 @@ async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
     etaStat,
     elapsedStat,
   );
-  const statsSection = h(
-    'section',
-    { style: 'margin-top:14px' },
-    sectionHeader('live transfer metrics', 'realtime'),
-    statsGrid,
+  const statsPanel = panel('metrics', 'realtime', statsGrid, { flush: true });
+
+  // Peers list panel — fills remaining left col space
+  const peerList = h('div', { class: 'peer-list' });
+  const peersPanel = panel('peers', '0 connected', peerList, { flush: true, fill: true });
+
+  // ----- RIGHT COL -----
+  const viz = createNetworkViz();
+  const netPanel = panel('topology', 'self ↔ trackers ↔ peers', viz.el, { flush: true, fill: true });
+
+  const workspace = h(
+    'div',
+    { class: 'workspace' },
+    h('div', { class: 'col left' }, sessionPanel, statsPanel, peersPanel),
+    h('div', { class: 'col right' }, netPanel),
   );
 
-  app.appendChild(progressSection);
-  app.appendChild(netSection);
-  app.appendChild(statsSection);
+  app.appendChild(liveAlert);
+  app.appendChild(workspace);
+
+  renderPeerList(peerList, []);
 
   viz.update({
     mode: 'receive',
@@ -660,6 +670,9 @@ async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
           });
         }
       }
+      renderPeerList(peerList, peers);
+      const meta = peersPanel.querySelector('.panel-head .meta');
+      if (meta) meta.textContent = `${peers.length} connected`;
       viz.update({
         mode: 'receive',
         trackers: lastTrackers,
@@ -714,6 +727,7 @@ async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
 
 function renderReceiveComplete(name: string, blob: Blob): void {
   clear(app);
+  app.classList.add('scrollable');
   setStatus('good', 'complete');
 
   const url = URL.createObjectURL(blob);
@@ -762,6 +776,7 @@ function renderReceiveComplete(name: string, blob: Blob): void {
 
 function renderReceiveError(msg: string): void {
   clear(app);
+  app.classList.add('scrollable');
   unlockUnload();
   setStatus('bad', 'error');
 
@@ -807,14 +822,55 @@ function sectionHeader(title: string, meta = ''): HTMLElement {
   );
 }
 
-function fileMeta(file: File): HTMLElement {
-  return h(
+/** Panel chrome — thin border + 20px head + body. Variadic body children. */
+function panel(
+  title: string,
+  meta: string,
+  ...bodyAndOpts: (HTMLElement | { flush?: boolean; tight?: boolean; fill?: boolean })[]
+): HTMLElement {
+  let opts: { flush?: boolean; tight?: boolean; fill?: boolean } = {};
+  const last = bodyAndOpts[bodyAndOpts.length - 1];
+  if (last && !(last instanceof HTMLElement) && !(last instanceof SVGElement)) {
+    opts = last as { flush?: boolean; tight?: boolean; fill?: boolean };
+    bodyAndOpts.pop();
+  }
+  const bodyClass = ['panel-body', opts.tight ? 'tight' : '', opts.flush ? 'flush' : '']
+    .filter(Boolean)
+    .join(' ');
+  const body = h('div', { class: bodyClass }, ...(bodyAndOpts as HTMLElement[]));
+  const head = h(
     'div',
-    { class: 'file-meta' },
-    icon('file', 'file-icon'),
-    h('div', { class: 'file-name' }, file.name),
-    h('div', { class: 'file-size' }, formatBytes(file.size)),
+    { class: 'panel-head' },
+    h('span', { class: 'title' }, title),
+    h('span', { class: 'meta' }, meta),
   );
+  return h('section', { class: 'panel' + (opts.fill ? ' fill' : '') }, head, body);
+}
+
+function renderPeerList(container: HTMLElement, peers: PeerInfo[]): void {
+  container.innerHTML = '';
+  if (peers.length === 0) {
+    const empty = h('div', { class: 'empty' }, '// no peers connected');
+    container.appendChild(empty);
+    return;
+  }
+  for (const p of peers) {
+    const id = p.addr || (p.id ? p.id.slice(0, 12) : p.type || 'peer');
+    const row = h(
+      'div',
+      { class: 'peer-row' },
+      h('span', { class: 'dot' }),
+      h('div', { class: 'id' }, id, h('span', { class: 'type' }, p.type || '')),
+      h(
+        'div',
+        { class: 'stats' },
+        h('span', { class: 'up' }, `↑${formatBytes(p.uploaded)}`),
+        ' ',
+        h('span', { class: 'dn' }, `↓${formatBytes(p.downloaded)}`),
+      ),
+    );
+    container.appendChild(row);
+  }
 }
 
 function kvCell(label: string, value: string): HTMLElement {

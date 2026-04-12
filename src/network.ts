@@ -36,10 +36,12 @@ export interface NetworkViz {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const VIEW_W = 640;
-const VIEW_H = 320;
+const VIEW_W = 440;
+const VIEW_H = 560;
 const CENTER_X = VIEW_W / 2;
 const CENTER_Y = VIEW_H / 2;
+const TRACKER_ROW_Y = 48;
+const PEER_ROW_Y = VIEW_H - 48;
 
 function svg<T extends SVGElement>(tag: string, attrs: Record<string, string | number> = {}): T {
   const el = document.createElementNS(SVG_NS, tag) as T;
@@ -50,12 +52,22 @@ function svg<T extends SVGElement>(tag: string, attrs: Record<string, string | n
 }
 
 function shortTracker(url: string): string {
-  return url.replace(/^wss?:\/\//, '').replace(/\/.*/, '');
+  let host = url.replace(/^wss?:\/\//, '').replace(/\/.*/, '');
+  // strip a leading "tracker." prefix — common across the public webrtc trackers
+  host = host.replace(/^tracker\./, '');
+  // if still long, drop the leading subdomain (e.g. "openwebtorrent.com")
+  if (host.length > 18) {
+    const parts = host.split('.');
+    if (parts.length > 2) host = parts.slice(-2).join('.');
+  }
+  // last-resort truncate
+  if (host.length > 20) host = host.slice(0, 19) + '…';
+  return host;
 }
 
 function shortPeer(p: PeerInfo): string {
-  if (p.addr && p.addr.length < 24) return p.addr;
-  if (p.id) return p.id.slice(0, 10);
+  if (p.addr && p.addr.length < 18) return p.addr;
+  if (p.id) return p.id.slice(0, 8);
   return p.type || 'peer';
 }
 
@@ -83,21 +95,10 @@ export function createNetworkViz(): NetworkViz {
   const root = svg<SVGSVGElement>('svg', {
     class: 'netviz',
     viewBox: `0 0 ${VIEW_W} ${VIEW_H}`,
+    preserveAspectRatio: 'xMidYMid meet',
     'aria-label': 'Live network topology',
   });
   wrap.appendChild(root);
-
-  const legend = document.createElement('div');
-  legend.className = 'netviz-legend';
-  legend.innerHTML = `
-    <span class="lg"><span class="swatch self"></span>self</span>
-    <span class="lg"><span class="swatch connected"></span>connected</span>
-    <span class="lg"><span class="swatch connecting"></span>announcing</span>
-    <span class="lg"><span class="swatch error"></span>error</span>
-    <span class="lg" style="margin-left:auto"><span style="color:var(--accent)">━</span>&nbsp;data</span>
-    <span class="lg"><span style="color:var(--good)">┄</span>&nbsp;signal</span>
-  `;
-  wrap.appendChild(legend);
 
   // Layers (order: links → nodes → pulses)
   const linkLayer = svg<SVGGElement>('g', { class: 'link-layer' });
@@ -118,8 +119,8 @@ export function createNetworkViz(): NetworkViz {
     cx: number;
     cy: number;
   } {
-    const w = 168;
-    const h = 56;
+    const w = 152;
+    const h = 48;
     const box = nodeBox(CENTER_X, CENTER_Y, w, h);
 
     const label = `${state.mode === 'send' ? 'seeding' : 'receiving'} · ${formatBytes(state.fileSize)}`;
@@ -138,19 +139,19 @@ export function createNetworkViz(): NetworkViz {
       y: box.y,
       width: box.w,
       height: box.h,
-      rx: 4,
+      rx: 3,
     });
     const labelText = svg<SVGTextElement>('text', {
       class: 'label',
       x: CENTER_X,
-      y: CENTER_Y - 4,
+      y: CENTER_Y - 3,
       'text-anchor': 'middle',
     });
     labelText.textContent = 'this browser';
     const subText = svg<SVGTextElement>('text', {
       class: 'sub',
       x: CENTER_X,
-      y: CENTER_Y + 12,
+      y: CENTER_Y + 10,
       'text-anchor': 'middle',
     });
     subText.textContent = label;
@@ -169,10 +170,11 @@ export function createNetworkViz(): NetworkViz {
     nodeLayer.querySelectorAll('.node-tracker').forEach((n) => n.remove());
     linkLayer.querySelectorAll('.link-tracker').forEach((n) => n.remove());
 
-    const nodeW = 138;
-    const nodeH = 28;
-    const margin = nodeW / 2 + 12;
-    const positions = distribute(state.trackers.length, margin, VIEW_W - margin, 36);
+    const nodeW = 116;
+    const nodeH = 22;
+    const rowY = TRACKER_ROW_Y;
+    const margin = nodeW / 2 + 8;
+    const positions = distribute(state.trackers.length, margin, VIEW_W - margin, rowY);
 
     state.trackers.forEach((t, i) => {
       const pos = positions[i];
@@ -190,7 +192,7 @@ export function createNetworkViz(): NetworkViz {
         y: pos.y - nodeH / 2,
         width: nodeW,
         height: nodeH,
-        rx: 3,
+        rx: 2,
       });
       const labelText = svg<SVGTextElement>('text', {
         class: 'label',
@@ -202,10 +204,10 @@ export function createNetworkViz(): NetworkViz {
       const subText = svg<SVGTextElement>('text', {
         class: 'sub',
         x: pos.x,
-        y: pos.y + 9,
+        y: pos.y + 8,
         'text-anchor': 'middle',
       });
-      subText.textContent = t.status === 'connected' && t.peers != null ? `${t.peers} swarm peers` : t.status;
+      subText.textContent = t.status === 'connected' && t.peers != null ? `${t.peers} peers` : t.status;
       g.appendChild(rect);
       g.appendChild(labelText);
       g.appendChild(subText);
@@ -213,7 +215,7 @@ export function createNetworkViz(): NetworkViz {
     });
 
     if (state.trackers.length === 0) {
-      const t = svg<SVGTextElement>('text', { class: 'empty-label node-tracker', x: CENTER_X, y: 36 });
+      const t = svg<SVGTextElement>('text', { class: 'empty-label node-tracker', x: CENTER_X, y: TRACKER_ROW_Y });
       t.textContent = 'no trackers';
       nodeLayer.appendChild(t);
     }
@@ -226,10 +228,11 @@ export function createNetworkViz(): NetworkViz {
     nodeLayer.querySelectorAll('.node-peer').forEach((n) => n.remove());
     linkLayer.querySelectorAll('.link-peer').forEach((n) => n.remove());
 
-    const nodeW = 116;
-    const nodeH = 30;
-    const margin = nodeW / 2 + 12;
-    const positions = distribute(state.peers.length, margin, VIEW_W - margin, VIEW_H - 36);
+    const nodeW = 100;
+    const nodeH = 24;
+    const rowY = PEER_ROW_Y;
+    const margin = nodeW / 2 + 8;
+    const positions = distribute(state.peers.length, margin, VIEW_W - margin, rowY);
     const active = state.downloadSpeed > 0 || state.uploadSpeed > 0;
 
     state.peers.forEach((p, i) => {
@@ -246,7 +249,7 @@ export function createNetworkViz(): NetworkViz {
         y: pos.y - nodeH / 2,
         width: nodeW,
         height: nodeH,
-        rx: 3,
+        rx: 2,
       });
       const labelText = svg<SVGTextElement>('text', {
         class: 'label',
@@ -258,7 +261,7 @@ export function createNetworkViz(): NetworkViz {
       const subText = svg<SVGTextElement>('text', {
         class: 'sub',
         x: pos.x,
-        y: pos.y + 10,
+        y: pos.y + 8,
         'text-anchor': 'middle',
       });
       subText.textContent = `↑${formatBytes(p.uploaded)} ↓${formatBytes(p.downloaded)}`;
@@ -272,7 +275,7 @@ export function createNetworkViz(): NetworkViz {
       const t = svg<SVGTextElement>('text', {
         class: 'empty-label node-peer',
         x: CENTER_X,
-        y: VIEW_H - 26,
+        y: PEER_ROW_Y + 6,
       });
       t.textContent = state.mode === 'send' ? 'waiting for peers…' : 'searching for peers…';
       nodeLayer.appendChild(t);
