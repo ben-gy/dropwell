@@ -143,10 +143,10 @@ function renderIdle(): void {
     h(
       'h1',
       {},
-      'dropwell',
+      'drop a file',
       h('span', { class: 'cursor', 'aria-hidden': 'true' }),
     ),
-    h('p', { class: 'tagline' }, '// encrypted peer-to-peer file drops'),
+    h('p', { class: 'tagline' }, '// encrypted peer-to-peer file transfer'),
   );
 
   const input = h('input', {

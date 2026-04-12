@@ -411,6 +411,14 @@ kbd {
   border-right: none;
   border-left: 1px solid var(--border);
 }
+.statusbar .attribution a {
+  color: var(--fg-0);
+  font-weight: 700;
+  text-decoration: none;
+}
+.statusbar .attribution a:hover {
+  color: var(--accent);
+}
 .status-pill {
   display: inline-flex;
   align-items: center;
