@@ -245,16 +245,20 @@ export function downloadFile(
           }
         });
 
-        torrent.on('done', () => {
-          const f = torrent.files[0];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          f.getBlob((err: Error | null, blob: Blob) => {
+        torrent.on('done', async () => {
+          try {
+            const f = torrent.files[0];
+            const blob: Blob = await f.blob();
             if (resolved) return;
             resolved = true;
             clearTimeout(noPeerTimer);
-            if (err) reject(err);
-            else resolve({ blob, torrent });
-          });
+            resolve({ blob, torrent });
+          } catch (err) {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(noPeerTimer);
+            reject(err);
+          }
         });
       });
 
