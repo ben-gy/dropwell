@@ -1,9 +1,11 @@
 /**
  * Dropwell entry point.
  *
- * Decides between send and receive mode based on the URL fragment, then
- * wires up the UI to the crypto + torrent modules. All state is driven by
- * real-time handlers coming from the torrent wrapper.
+ * Wires the desktop-app shell: top bar status, main content area,
+ * right-side live event drawer, bottom status bar. Decides between send
+ * and receive mode based on the URL fragment, then drives the UI from
+ * the torrent + crypto modules using real-time event handlers that all
+ * route through the central event log.
  */
 
 import './styles/main.css';
@@ -19,7 +21,6 @@ import {
 import { buildShareUrl, parseShareUrl } from './router';
 import {
   clear,
-  createLog,
   formatBytes,
   formatSpeed,
   formatSeconds,
@@ -29,49 +30,120 @@ import {
   mount,
   toast,
 } from './ui';
+import { createNetworkViz } from './network';
+import { emit as logEvent, mountEventDrawer } from './eventlog';
 
 // ---------- top-level app lifecycle ----------
 
 const app = mount();
-const client = createClient();
+const drawerEl = document.getElementById('event-drawer')!;
+mountEventDrawer(drawerEl);
 
+const client = createClient();
 initModalTriggers();
+
+logEvent('system', 'ok', 'dropwell ready', { build: 'v0.1', mode: 'idle' });
+logEvent('system', 'info', 'webcrypto available', { subtle: 'crypto.subtle' });
+logEvent('system', 'info', 'webtorrent client created');
+
+// ---------- session clock ----------
+const sessionStart = Date.now();
+setInterval(() => {
+  const dt = Math.floor((Date.now() - sessionStart) / 1000);
+  const m = String(Math.floor(dt / 60)).padStart(2, '0');
+  const s = String(dt % 60).padStart(2, '0');
+  const el = document.getElementById('sb-clock');
+  if (el) el.innerHTML = `<span style="color:var(--fg-3)">t</span> ${m}:${s}`;
+}, 1000);
+
+// ---------- beforeunload guard ----------
+let unloadGuardActive = false;
+function beforeUnloadHandler(e: BeforeUnloadEvent) {
+  e.preventDefault();
+  // Required by Chrome/Edge
+  e.returnValue = '';
+  return '';
+}
+function lockUnload(reason: string): void {
+  if (unloadGuardActive) return;
+  unloadGuardActive = true;
+  window.addEventListener('beforeunload', beforeUnloadHandler);
+  logEvent('system', 'warn', `unload guard armed — ${reason}`);
+}
+function unlockUnload(): void {
+  if (!unloadGuardActive) return;
+  unloadGuardActive = false;
+  window.removeEventListener('beforeunload', beforeUnloadHandler);
+  logEvent('system', 'info', 'unload guard released');
+}
 
 window.addEventListener('beforeunload', () => destroyClient(client));
 
+// ---------- status bar helpers ----------
+function setStatus(state: 'idle' | 'busy' | 'good' | 'warn' | 'bad', label: string): void {
+  const dot = document.getElementById('sb-status-dot');
+  const lab = document.getElementById('sb-status-label');
+  if (dot) {
+    dot.className = 'dot-mini ' + (state === 'idle' ? 'idle' : state === 'bad' ? 'bad' : state === 'warn' ? 'warn' : '');
+  }
+  if (lab) lab.textContent = label;
+}
+function setStatusMode(mode: string): void {
+  const el = document.getElementById('sb-mode');
+  if (el) el.innerHTML = mode ? `<span style="color:var(--fg-3)">mode</span> ${mode}` : '';
+}
+function setStatusPeers(n: number): void {
+  const el = document.getElementById('sb-peers');
+  if (el) el.innerHTML = `<span style="color:var(--fg-3)">peers</span> ${n}`;
+}
+function setStatusTrackers(connected: number, total: number): void {
+  const el = document.getElementById('sb-trackers');
+  if (el) el.innerHTML = `<span style="color:var(--fg-3)">trackers</span> ${connected}/${total}`;
+}
+function setStatusThroughput(down: number, up: number): void {
+  const el = document.getElementById('sb-throughput');
+  if (el) {
+    const txt = down > 0 || up > 0 ? `↓${formatSpeed(down)} · ↑${formatSpeed(up)}` : '—';
+    el.innerHTML = `<span style="color:var(--fg-3)">throughput</span> ${txt}`;
+  }
+}
+
+// ---------- mode dispatch ----------
+
 const share = parseShareUrl();
 if (share) {
+  setStatusMode('receive');
+  logEvent('ui', 'info', 'parsed share url from fragment', {
+    keyHashPrefix: share.keyHex.slice(0, 8),
+  });
   renderReceive(share.magnetURI, share.keyHex).catch((err) => {
     console.error(err);
     renderReceiveError(err instanceof Error ? err.message : String(err));
   });
 } else {
+  setStatusMode('idle');
   renderIdle();
 }
 
 // ====================================================================
-//  SEND MODE
+//  SEND MODE — IDLE
 // ====================================================================
 
 function renderIdle(): void {
   clear(app);
+  setStatus('idle', 'idle');
+  logEvent('ui', 'info', 'render: idle');
 
   const hero = h(
-    'section',
-    { class: 'hero' },
+    'div',
+    { class: 'hero-strip' },
     h(
       'h1',
       {},
-      'encrypted p2p file drops',
+      'dropwell',
       h('span', { class: 'cursor', 'aria-hidden': 'true' }),
     ),
-    h(
-      'p',
-      { class: 'tagline' },
-      'Drop a file. Get a link. Share it. Files are encrypted in your browser and streamed ',
-      h('strong', {}, 'peer-to-peer'),
-      ' — never stored on any server.',
-    ),
+    h('p', { class: 'tagline' }, '// encrypted peer-to-peer file drops'),
   );
 
   const input = h('input', {
@@ -90,11 +162,7 @@ function renderIdle(): void {
     },
     icon('upload', 'dropzone-icon'),
     h('h2', {}, 'drop file to encrypt & share'),
-    h(
-      'p',
-      {},
-      'or click to browse — encrypted locally, streamed via webrtc, never touches a server',
-    ),
+    h('p', {}, 'or click to browse · encrypted locally · streamed via webrtc'),
     h('span', { class: 'browse' }, '> select file'),
     input,
   );
@@ -116,7 +184,7 @@ function renderIdle(): void {
     if (f) void handleFile(f);
   });
 
-  // Page-level drag handling to prevent the browser from opening dropped files.
+  // Page-level drag handling
   window.addEventListener('dragover', (e: DragEvent) => {
     e.preventDefault();
     dropzone.classList.add('is-dragging');
@@ -132,179 +200,283 @@ function renderIdle(): void {
     if (f) void handleFile(f);
   });
 
-  // Below the dropzone: a row of security badges for trust.
-  const badges = h(
+  const features = h(
     'div',
-    { class: 'security-badges', 'aria-label': 'Security features' },
-    secBadge('lock', 'aes-gcm-256'),
-    secBadge('lock', 'key never leaves browser'),
-    secBadge('info', 'zero backend'),
-    secBadge('info', 'webrtc peer-to-peer'),
-    secBadge('info', 'no tracking'),
+    { class: 'feature-row' },
+    featurePill('lock', 'aes-gcm-256'),
+    featurePill('lock', 'key in fragment only'),
+    featurePill('share', 'webrtc data channels'),
+    featurePill('info', 'zero backend / zero tracking'),
   );
 
   app.appendChild(hero);
   app.appendChild(dropzone);
-  app.appendChild(badges);
+  app.appendChild(features);
 }
 
 async function handleFile(file: File): Promise<void> {
   try {
+    logEvent('ui', 'info', 'file selected', { name: file.name, size: file.size });
     renderEncrypting(file);
+    setStatus('busy', 'encrypting');
+    setStatusMode('encrypt');
+
+    logEvent('crypto', 'info', 'generating aes-gcm-256 key');
+    const t0 = performance.now();
     const { key, hex } = await generateKey();
+    logEvent('crypto', 'ok', 'key generated', {
+      bits: 256,
+      ms: Math.round(performance.now() - t0),
+      fp: fingerprint(hex),
+    });
+
     // Let the progress frame paint before we block on encryption for big files.
     await new Promise((r) => setTimeout(r, 50));
+
+    logEvent('crypto', 'info', 'encrypting file', { size: file.size });
+    const t1 = performance.now();
     const encrypted = await encryptFile(file, key);
+    logEvent('crypto', 'ok', 'encryption complete', {
+      input: file.size,
+      output: encrypted.size,
+      ms: Math.round(performance.now() - t1),
+    });
+
     await renderSeeding(file, encrypted, hex);
   } catch (err) {
     console.error(err);
+    logEvent('crypto', 'err', err instanceof Error ? err.message : String(err));
     renderSendError(err instanceof Error ? err.message : String(err));
   }
 }
 
+// ====================================================================
+//  SEND MODE — ENCRYPTING
+// ====================================================================
+
 function renderEncrypting(file: File): void {
   clear(app);
-  const panel = h(
+
+  const sec = h(
     'section',
-    { class: 'panel' },
-    h('h2', {}, h('span', { class: 'dot' }), 'encrypting locally...'),
+    {},
+    sectionHeader('encrypting locally', 'aes-gcm-256'),
     fileMeta(file),
     h('div', { class: 'progress progress-indeterminate' }, h('div', { class: 'progress-fill' })),
     h(
       'div',
-      { class: 'banner banner-info' },
+      { class: 'alert alert-info', style: 'margin-top:14px' },
       icon('lock', 'icon'),
       h(
         'p',
         {},
+        h('strong', {}, 'encrypting · '),
         'Generating a fresh AES-GCM-256 key in your browser and encrypting the file. The key will only ever live in this tab and in the URL fragment.',
       ),
     ),
   );
-  app.appendChild(panel);
+  app.appendChild(sec);
 }
+
+// ====================================================================
+//  SEND MODE — SEEDING
+// ====================================================================
 
 async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: string): Promise<void> {
   clear(app);
+  setStatus('warn', 'seeding');
+  setStatusMode('seed');
+  lockUnload('seeding active — closing the tab will tear down the swarm');
 
-  const panel = h('section', { class: 'panel' });
-  panel.appendChild(h('h2', {}, h('span', { class: 'dot' }), 'seeding — keep this tab open'));
-
-  // Security badges up front — these visibly confirm the protection in place.
-  panel.appendChild(
+  // Live red warning at the top
+  const liveAlert = h(
+    'div',
+    { class: 'live-alert', role: 'alert' },
+    h('span', { class: 'pulse' }),
     h(
       'div',
-      { class: 'security-badges' },
-      secBadge('lock', 'aes-gcm-256 ✓'),
-      secBadge('lock', `key fingerprint ${fingerprint(keyHex)}`),
-      secBadge('info', 'e2e encrypted'),
-      secBadge('info', 'p2p via webrtc'),
+      { class: 'body' },
+      h('strong', {}, '⚠ keep this tab open'),
+      h(
+        'span',
+        {},
+        'your browser is the seed — closing this tab tears down the swarm and the link goes dark instantly.',
+      ),
     ),
   );
 
-  panel.appendChild(fileMeta(originalFile));
+  // Section: identity
+  const idHead = sectionHeader('drop session', `key ${fingerprint(keyHex)}`);
+  const idMeta = fileMeta(originalFile);
 
-  // Key ribbon — gives users visible proof their key exists and is never
-  // uploaded (it lives in the URL fragment only).
-  panel.appendChild(
-    h(
-      'div',
-      { class: 'key-ribbon' },
-      icon('lock'),
-      h('span', { class: 'label' }, 'your encryption key (stays in-browser):'),
-      h('span', { class: 'fp' }, fingerprint(keyHex)),
-    ),
-  );
-
+  // Section: share link
   const linkInput = h('input', {
     type: 'text',
     readonly: '',
-    value: 'starting webtorrent swarm...',
+    value: 'starting webtorrent swarm…',
     'aria-label': 'Share URL',
   }) as HTMLInputElement;
   const copyBtn = h('button', { class: 'primary', disabled: '' }, 'copy link');
   const shareBtn = h('button', { class: 'ghost', disabled: '' }, 'share');
   const newBtn = h('button', { class: 'ghost' }, 'drop another');
 
-  panel.appendChild(h('div', { class: 'share-url' }, linkInput, copyBtn));
-  panel.appendChild(h('div', { class: 'share-actions' }, shareBtn, newBtn));
-
-  const peerStat = statBox('peers', '0');
-  const uploadedStat = statBox('uploaded', '0 B');
-  const speedStat = statBox('up speed', '0 B/s');
-  const ratioStat = statBox('ratio', '0.00');
-  panel.appendChild(h('div', { class: 'stats' }, peerStat, uploadedStat, speedStat, ratioStat));
-
-  // Live peer + tracker lists
-  const peerList = h('ul', { class: 'live-list' }, emptyLi('no peers connected yet'));
-  const trackerList = h('ul', { class: 'live-list' }, emptyLi('announcing to trackers...'));
-  const peerCount = h('span', { class: 'count' }, '0');
-  const trackerCount = h('span', { class: 'count' }, '0');
-
-  panel.appendChild(
-    h(
-      'div',
-      { class: 'live-grid' },
-      liveCard('connected peers', peerCount, peerList),
-      liveCard('trackers', trackerCount, trackerList),
-    ),
+  const linkCard = h(
+    'section',
+    {},
+    sectionHeader('share link', 'fragment never leaves the browser'),
+    h('div', { class: 'share-url' }, linkInput, copyBtn),
+    h('div', { class: 'btn-row', style: 'margin-top:10px' }, shareBtn, newBtn),
   );
 
-  panel.appendChild(
-    h(
-      'div',
-      { class: 'banner banner-warn' },
-      icon('warn', 'icon'),
-      h(
-        'p',
-        {},
-        h('strong', {}, 'keep this tab open. '),
-        'Your browser is the seed — if you close it, the file disappears from the network.',
-      ),
-    ),
+  // Section: live network viz
+  const viz = createNetworkViz();
+  const netSection = h(
+    'section',
+    { style: 'margin-top:14px' },
+    sectionHeader('live network topology', 'browser ↔ trackers ↔ peers'),
+    viz.el,
   );
 
-  const logPanel = h('div');
-  panel.appendChild(logPanel);
-  const { log } = createLog(logPanel);
+  // Section: stats
+  const downStat = kvCell('down', '0 B/s');
+  const upStat = kvCell('up', '0 B/s');
+  const peerStat = kvCell('peers', '0');
+  const ratioStat = kvCell('ratio', '0.00');
+  const uploadedStat = kvCell('uploaded', '0 B');
+  const elapsedStat = kvCell('elapsed', '0s');
 
-  app.appendChild(panel);
+  const statsGrid = h(
+    'div',
+    { class: 'kv-grid' },
+    downStat,
+    upStat,
+    peerStat,
+    ratioStat,
+    uploadedStat,
+    elapsedStat,
+  );
 
-  log(`encrypted ${encryptedFile.size.toLocaleString()} bytes (AES-GCM-256)`, 'ok');
-  log(`key fingerprint: ${fingerprint(keyHex)}`, 'ok');
-  log('joining swarm...');
+  const statsSection = h(
+    'section',
+    { style: 'margin-top:14px' },
+    sectionHeader('live transfer metrics', 'realtime'),
+    statsGrid,
+  );
+
+  app.appendChild(liveAlert);
+  app.appendChild(h('section', {}, idHead, idMeta));
+  app.appendChild(linkCard);
+  app.appendChild(netSection);
+  app.appendChild(statsSection);
+
+  const startedAt = Date.now();
+
+  // Initial network viz state
+  viz.update({
+    mode: 'send',
+    trackers: [],
+    peers: [],
+    downloadSpeed: 0,
+    uploadSpeed: 0,
+    fileSize: encryptedFile.size,
+    fileName: originalFile.name,
+  });
+
+  logEvent('crypto', 'info', `encrypted payload ${encryptedFile.size.toLocaleString()} bytes`);
+  logEvent('net', 'info', 'joining webtorrent swarm');
+
+  let lastTrackers: TrackerInfo[] = [];
+  let lastPeers: PeerInfo[] = [];
+
+  const seenPeers = new Set<string>();
 
   const { magnetURI, infoHash } = await seedFile(client, encryptedFile, {
     onProgress: (info) => {
+      downStat.querySelector('.value')!.textContent = formatSpeed(info.downloadSpeed);
+      upStat.querySelector('.value')!.textContent = formatSpeed(info.uploadSpeed);
       peerStat.querySelector('.value')!.textContent = String(info.numPeers);
-      uploadedStat.querySelector('.value')!.textContent = formatBytes(info.uploaded);
-      speedStat.querySelector('.value')!.textContent = formatSpeed(info.uploadSpeed);
       ratioStat.querySelector('.value')!.textContent = info.ratio.toFixed(2);
-      peerCount.textContent = String(info.numPeers);
-    },
-    onPeer: (peers) => renderPeerList(peerList, peers),
-    onTrackers: (trackers) => {
-      renderTrackerList(trackerList, trackers);
-      trackerCount.textContent = String(
-        trackers.filter((t) => t.status === 'connected').length,
+      uploadedStat.querySelector('.value')!.textContent = formatBytes(info.uploaded);
+      elapsedStat.querySelector('.value')!.textContent = formatSeconds(
+        (Date.now() - startedAt) / 1000,
       );
+
+      setStatusPeers(info.numPeers);
+      setStatusThroughput(info.downloadSpeed, info.uploadSpeed);
+
+      viz.update({
+        mode: 'send',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: info.downloadSpeed,
+        uploadSpeed: info.uploadSpeed,
+        fileSize: encryptedFile.size,
+        fileName: originalFile.name,
+      });
     },
-    onLog: (m, k) => log(m, k),
-    onError: (err) => log(`error: ${err.message}`, 'err'),
+    onPeer: (peers) => {
+      lastPeers = peers;
+      for (const p of peers) {
+        if (!seenPeers.has(p.id || p.addr)) {
+          seenPeers.add(p.id || p.addr);
+          logEvent('peer', 'ok', `peer connected · ${p.addr || p.type}`, {
+            type: p.type,
+            id: (p.id || '').slice(0, 12) || 'unknown',
+          });
+        }
+      }
+      viz.update({
+        mode: 'send',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        fileSize: encryptedFile.size,
+        fileName: originalFile.name,
+      });
+    },
+    onTrackers: (trackers) => {
+      lastTrackers = trackers;
+      const connected = trackers.filter((t) => t.status === 'connected').length;
+      setStatusTrackers(connected, trackers.length);
+      viz.update({
+        mode: 'send',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        fileSize: encryptedFile.size,
+        fileName: originalFile.name,
+      });
+    },
+    onLog: (msg, kind) => {
+      // Categorize torrent-layer messages by keyword
+      const m = msg.toLowerCase();
+      if (m.includes('tracker')) logEvent('tracker', kind || 'info', msg);
+      else if (m.includes('wire') || m.includes('handshake') || m.includes('first byte')) logEvent('wire', kind || 'info', msg);
+      else if (m.includes('peer')) logEvent('peer', kind || 'info', msg);
+      else logEvent('net', kind || 'info', msg);
+    },
+    onError: (err) => {
+      logEvent('net', 'err', `error: ${err.message}`);
+      setStatus('bad', 'error');
+    },
   });
 
   const shareUrl = buildShareUrl(magnetURI, keyHex);
   linkInput.value = shareUrl;
   copyBtn.removeAttribute('disabled');
-  log(`magnet ready · infohash: ${infoHash}`, 'ok');
-  log('waiting for peers to connect...');
 
-  panel.querySelector('.dot')?.classList.add('good');
+  logEvent('net', 'ok', 'magnet ready', { infohash: infoHash.slice(0, 16) + '…' });
+  logEvent('ui', 'ok', 'share link generated · waiting for peers');
+
+  setStatus('good', 'live · awaiting peers');
 
   copyBtn.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
       toast('link copied');
+      logEvent('ui', 'ok', 'share link copied to clipboard');
     } catch {
       linkInput.select();
       document.execCommand('copy');
@@ -322,6 +494,7 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
           text: 'Encrypted file drop',
           url: shareUrl,
         });
+        logEvent('ui', 'ok', 'share sheet invoked');
       } catch {
         /* user cancelled */
       }
@@ -329,27 +502,29 @@ async function renderSeeding(originalFile: File, encryptedFile: File, keyHex: st
   }
 
   newBtn.addEventListener('click', () => {
-    // Open a fresh tab so the current seed keeps running.
     window.open(window.location.origin + window.location.pathname, '_blank');
+    logEvent('ui', 'info', 'opening new tab for fresh drop');
   });
 }
 
 function renderSendError(msg: string): void {
   clear(app);
+  unlockUnload();
+  setStatus('bad', 'error');
   app.appendChild(
     h(
       'section',
-      { class: 'panel' },
-      h('h2', {}, h('span', { class: 'dot bad' }), 'something broke'),
+      {},
+      sectionHeader('error', 'send aborted'),
       h(
         'div',
-        { class: 'banner banner-error' },
+        { class: 'alert alert-error' },
         icon('warn', 'icon'),
-        h('p', {}, msg),
+        h('p', {}, h('strong', {}, 'aborted · '), msg),
       ),
       h(
         'div',
-        { class: 'share-actions' },
+        { class: 'btn-row', style: 'margin-top:14px' },
         h('button', { class: 'primary', id: 'retry-send' }, 'try again'),
       ),
     ),
@@ -363,172 +538,252 @@ function renderSendError(msg: string): void {
 
 async function renderReceive(magnetURI: string, keyHex: string): Promise<void> {
   clear(app);
+  setStatus('warn', 'receiving');
+  setStatusMode('receive');
+  lockUnload('receive in progress — closing tab abandons the transfer');
 
-  const panel = h('section', { class: 'panel' });
-  panel.appendChild(h('h2', {}, h('span', { class: 'dot' }), 'receiving encrypted drop'));
+  logEvent('net', 'info', 'parsed share url', {
+    infohash: (magnetURI.match(/btih:([a-f0-9]+)/i)?.[1] || '?').slice(0, 16) + '…',
+  });
+  logEvent('crypto', 'info', 'key fingerprint loaded', { fp: fingerprint(keyHex) });
 
-  panel.appendChild(
+  const idHead = sectionHeader('incoming drop', `key ${fingerprint(keyHex)}`);
+
+  const progressBar = h('div', { class: 'progress' }, h('div', { class: 'progress-fill' }));
+  const progressSection = h(
+    'section',
+    {},
+    idHead,
     h(
       'div',
-      { class: 'security-badges' },
-      secBadge('lock', 'aes-gcm-256'),
-      secBadge('lock', `key fingerprint ${fingerprint(keyHex)}`),
-      secBadge('info', 'decrypt-on-device'),
-      secBadge('info', 'p2p via webrtc'),
-    ),
-  );
-
-  panel.appendChild(
-    h(
-      'div',
-      { class: 'banner banner-info' },
+      { class: 'alert alert-info', style: 'margin-bottom:14px' },
       icon('info', 'icon'),
       h(
         'p',
         {},
-        'Connecting to the sender via WebRTC. The ciphertext is streamed peer-to-peer and decrypted locally once the transfer is complete — the sender\'s key came from the URL fragment you just opened.',
+        h('strong', {}, 'connecting · '),
+        'streaming ciphertext peer-to-peer over WebRTC. Decryption happens in this browser, never on a server.',
       ),
     ),
+    progressBar,
   );
 
-  const progressBar = h('div', { class: 'progress' }, h('div', { class: 'progress-fill' }));
-  panel.appendChild(progressBar);
-
-  const peerStat = statBox('peers', '0');
-  const progressStat = statBox('progress', '0%');
-  const speedStat = statBox('down speed', '0 B/s');
-  const sizeStat = statBox('downloaded', '0 B');
-  const etaStat = statBox('eta', '—');
-  panel.appendChild(h('div', { class: 'stats' }, peerStat, progressStat, speedStat, sizeStat, etaStat));
-
-  const peerList = h('ul', { class: 'live-list' }, emptyLi('searching for peers...'));
-  const trackerList = h('ul', { class: 'live-list' }, emptyLi('announcing to trackers...'));
-  const peerCount = h('span', { class: 'count' }, '0');
-  const trackerCount = h('span', { class: 'count' }, '0');
-
-  panel.appendChild(
-    h(
-      'div',
-      { class: 'live-grid' },
-      liveCard('connected peers', peerCount, peerList),
-      liveCard('trackers', trackerCount, trackerList),
-    ),
+  const viz = createNetworkViz();
+  const netSection = h(
+    'section',
+    { style: 'margin-top:14px' },
+    sectionHeader('live network topology', 'browser ↔ trackers ↔ peers'),
+    viz.el,
   );
 
-  const logPanel = h('div');
-  panel.appendChild(logPanel);
-  const { log } = createLog(logPanel);
+  const pctStat = kvCell('progress', '0%');
+  const downStat = kvCell('down', '0 B/s');
+  const sizeStat = kvCell('downloaded', '0 B');
+  const peerStat = kvCell('peers', '0');
+  const etaStat = kvCell('eta', '—');
+  const elapsedStat = kvCell('elapsed', '0s');
+  const statsGrid = h(
+    'div',
+    { class: 'kv-grid' },
+    pctStat,
+    downStat,
+    sizeStat,
+    peerStat,
+    etaStat,
+    elapsedStat,
+  );
+  const statsSection = h(
+    'section',
+    { style: 'margin-top:14px' },
+    sectionHeader('live transfer metrics', 'realtime'),
+    statsGrid,
+  );
 
-  app.appendChild(panel);
+  app.appendChild(progressSection);
+  app.appendChild(netSection);
+  app.appendChild(statsSection);
 
-  log('parsed share URL');
-  log(`infohash: ${magnetURI.match(/btih:([a-f0-9]+)/i)?.[1] ?? '?'}`);
-  log(`key fingerprint: ${fingerprint(keyHex)}`, 'ok');
-  log('joining swarm, waiting for peers...');
+  viz.update({
+    mode: 'receive',
+    trackers: [],
+    peers: [],
+    downloadSpeed: 0,
+    uploadSpeed: 0,
+    fileSize: 0,
+    fileName: '',
+  });
+
+  const startedAt = Date.now();
+  let lastTrackers: TrackerInfo[] = [];
+  let lastPeers: PeerInfo[] = [];
+  const seenPeers = new Set<string>();
+  let totalSize = 0;
+
+  logEvent('net', 'info', 'joining swarm, waiting for peers');
 
   const key = await importKey(keyHex);
 
   const result = await downloadFile(client, magnetURI, {
     onProgress: (info) => {
+      totalSize = info.total || totalSize;
       (progressBar.firstElementChild as HTMLElement).style.width = `${info.percent.toFixed(1)}%`;
-      progressStat.querySelector('.value')!.textContent = `${info.percent.toFixed(0)}%`;
-      speedStat.querySelector('.value')!.textContent = formatSpeed(info.downloadSpeed);
+      pctStat.querySelector('.value')!.textContent = `${info.percent.toFixed(0)}%`;
+      downStat.querySelector('.value')!.textContent = formatSpeed(info.downloadSpeed);
       sizeStat.querySelector('.value')!.textContent = formatBytes(info.downloaded);
       peerStat.querySelector('.value')!.textContent = String(info.numPeers);
-      peerCount.textContent = String(info.numPeers);
       etaStat.querySelector('.value')!.textContent = formatSeconds(info.timeRemaining / 1000);
-    },
-    onPeer: (peers) => renderPeerList(peerList, peers),
-    onTrackers: (trackers) => {
-      renderTrackerList(trackerList, trackers);
-      trackerCount.textContent = String(
-        trackers.filter((t) => t.status === 'connected').length,
+      elapsedStat.querySelector('.value')!.textContent = formatSeconds(
+        (Date.now() - startedAt) / 1000,
       );
+
+      setStatusPeers(info.numPeers);
+      setStatusThroughput(info.downloadSpeed, 0);
+
+      viz.update({
+        mode: 'receive',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: info.downloadSpeed,
+        uploadSpeed: info.uploadSpeed,
+        fileSize: totalSize,
+        fileName: '',
+      });
     },
-    onLog: (m, k) => log(m, k),
-    onError: (err) => log(`error: ${err.message}`, 'err'),
+    onPeer: (peers) => {
+      lastPeers = peers;
+      for (const p of peers) {
+        if (!seenPeers.has(p.id || p.addr)) {
+          seenPeers.add(p.id || p.addr);
+          logEvent('peer', 'ok', `peer connected · ${p.addr || p.type}`, {
+            type: p.type,
+            id: (p.id || '').slice(0, 12) || 'unknown',
+          });
+        }
+      }
+      viz.update({
+        mode: 'receive',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        fileSize: totalSize,
+        fileName: '',
+      });
+    },
+    onTrackers: (trackers) => {
+      lastTrackers = trackers;
+      const connected = trackers.filter((t) => t.status === 'connected').length;
+      setStatusTrackers(connected, trackers.length);
+      viz.update({
+        mode: 'receive',
+        trackers: lastTrackers,
+        peers: lastPeers,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        fileSize: totalSize,
+        fileName: '',
+      });
+    },
+    onLog: (msg, kind) => {
+      const m = msg.toLowerCase();
+      if (m.includes('tracker')) logEvent('tracker', kind || 'info', msg);
+      else if (m.includes('wire') || m.includes('handshake') || m.includes('first byte')) logEvent('wire', kind || 'info', msg);
+      else if (m.includes('peer')) logEvent('peer', kind || 'info', msg);
+      else logEvent('net', kind || 'info', msg);
+    },
+    onError: (err) => {
+      logEvent('net', 'err', err.message);
+      setStatus('bad', 'error');
+    },
   });
 
-  log('download complete, decrypting in-browser...', 'ok');
-  panel.querySelector('.dot')?.classList.add('good');
+  logEvent('net', 'ok', 'download complete', { bytes: totalSize });
+  logEvent('crypto', 'info', 'decrypting payload in-browser');
 
   const buffer = await result.blob.arrayBuffer();
+  const t0 = performance.now();
   const { name, blob } = await decryptBlob(buffer, key);
+  logEvent('crypto', 'ok', `decryption complete · ${name}`, {
+    size: blob.size,
+    ms: Math.round(performance.now() - t0),
+  });
 
-  log(`decrypted: ${name} (${formatBytes(blob.size)})`, 'ok');
-
+  unlockUnload();
   renderReceiveComplete(name, blob);
 }
 
 function renderReceiveComplete(name: string, blob: Blob): void {
   clear(app);
+  setStatus('good', 'complete');
 
   const url = URL.createObjectURL(blob);
-  const panel = h(
+
+  const dl = h(
+    'a',
+    { class: 'btn primary', href: url, download: name, role: 'button' },
+    'save file',
+  );
+  dl.addEventListener('click', () => {
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  });
+
+  const sec = h(
     'section',
-    { class: 'panel' },
-    h('h2', {}, h('span', { class: 'dot good' }), 'decryption successful'),
-    h(
-      'div',
-      { class: 'security-badges' },
-      secBadge('lock', 'aes-gcm-256 verified'),
-      secBadge('info', 'integrity check passed'),
-    ),
+    {},
+    sectionHeader('decryption successful', 'integrity verified'),
     h(
       'div',
       { class: 'complete-hero' },
       icon('check', 'check'),
       h('h3', {}, name),
       h('p', {}, `${formatBytes(blob.size)} · decrypted locally`),
-      (() => {
-        const dl = h(
-          'a',
-          { class: 'btn primary', href: url, download: name, role: 'button' },
-          'save file',
-        );
-        dl.addEventListener('click', () => {
-          setTimeout(() => URL.revokeObjectURL(url), 3000);
-        });
-        return dl;
-      })(),
+      dl,
     ),
     h(
       'div',
-      { class: 'banner banner-info' },
+      { class: 'alert alert-info', style: 'margin-top:14px' },
       icon('info', 'icon'),
       h(
         'p',
         {},
-        'The sender can close their tab once you\'ve saved the file. ',
-        h('a', { href: window.location.origin + window.location.pathname }, 'drop your own file'),
+        h('strong', {}, 'done · '),
+        "the sender can close their tab once you've saved the file. ",
+        h(
+          'a',
+          { href: window.location.origin + window.location.pathname },
+          'drop your own file',
+        ),
         '.',
       ),
     ),
   );
-  app.appendChild(panel);
+  app.appendChild(sec);
 }
 
 function renderReceiveError(msg: string): void {
   clear(app);
+  unlockUnload();
+  setStatus('bad', 'error');
+
   app.appendChild(
     h(
       'section',
-      { class: 'panel' },
-      h('h2', {}, h('span', { class: 'dot bad' }), 'receive failed'),
+      {},
+      sectionHeader('receive failed', 'transfer aborted'),
       h(
         'div',
-        { class: 'banner banner-error' },
+        { class: 'alert alert-error' },
         icon('warn', 'icon'),
-        h('p', {}, msg),
+        h('p', {}, h('strong', {}, 'aborted · '), msg),
       ),
       h(
         'p',
-        { style: 'color: var(--fg-2); font-size: 13px; margin-top: 16px;' },
-        'Common causes: the sender closed their browser tab, a firewall is blocking WebRTC, or the link was altered in transit.',
+        { style: 'color: var(--fg-2); font-size: 11px; margin-top: 14px; text-transform:uppercase; letter-spacing:0.06em;' },
+        '// common causes: sender closed tab · firewall blocking webrtc · link altered in transit',
       ),
       h(
         'div',
-        { class: 'share-actions' },
+        { class: 'btn-row', style: 'margin-top:14px' },
         h(
           'a',
           { class: 'btn', href: window.location.origin + window.location.pathname },
@@ -543,6 +798,15 @@ function renderReceiveError(msg: string): void {
 //  small view helpers
 // ====================================================================
 
+function sectionHeader(title: string, meta = ''): HTMLElement {
+  return h(
+    'div',
+    { class: 'sh' },
+    h('h2', {}, title),
+    h('span', { class: 'sh-meta' }, meta),
+  );
+}
+
 function fileMeta(file: File): HTMLElement {
   return h(
     'div',
@@ -553,69 +817,17 @@ function fileMeta(file: File): HTMLElement {
   );
 }
 
-function statBox(label: string, value: string): HTMLElement {
+function kvCell(label: string, value: string): HTMLElement {
   return h(
     'div',
-    { class: 'stat' },
+    { class: 'kv-cell' },
     h('div', { class: 'label' }, label),
     h('div', { class: 'value' }, value),
   );
 }
 
-function secBadge(iconName: 'lock' | 'info', label: string): HTMLElement {
-  return h('span', { class: 'sec-badge' }, icon(iconName), h('span', {}, label));
-}
-
-function liveCard(title: string, count: HTMLElement, list: HTMLElement): HTMLElement {
-  return h(
-    'div',
-    { class: 'live-card' },
-    h('div', { class: 'live-card-head' }, h('span', {}, title), count),
-    list,
-  );
-}
-
-function emptyLi(msg: string): HTMLElement {
-  return h('li', { class: 'empty' }, msg);
-}
-
-function renderPeerList(ul: HTMLElement, peers: PeerInfo[]): void {
-  while (ul.firstChild) ul.removeChild(ul.firstChild);
-  if (!peers.length) {
-    ul.appendChild(emptyLi('no peers connected yet'));
-    return;
-  }
-  for (const p of peers) {
-    ul.appendChild(
-      h(
-        'li',
-        {},
-        h('span', { class: 'dot-small connected' }),
-        h('span', { class: 'main' }, p.addr || p.type),
-        h('span', { class: 'sub' }, `↑${formatBytes(p.uploaded)} ↓${formatBytes(p.downloaded)}`),
-      ),
-    );
-  }
-}
-
-function renderTrackerList(ul: HTMLElement, trackers: TrackerInfo[]): void {
-  while (ul.firstChild) ul.removeChild(ul.firstChild);
-  if (!trackers.length) {
-    ul.appendChild(emptyLi('no trackers configured'));
-    return;
-  }
-  for (const t of trackers) {
-    const short = t.url.replace(/^wss?:\/\//, '').replace(/\/.*/, '');
-    ul.appendChild(
-      h(
-        'li',
-        {},
-        h('span', { class: `dot-small ${t.status}` }),
-        h('span', { class: 'main' }, short),
-        h('span', { class: 'sub' }, t.status),
-      ),
-    );
-  }
+function featurePill(iconName: 'lock' | 'info' | 'share', label: string): HTMLElement {
+  return h('div', { class: 'feature-pill' }, icon(iconName), h('span', {}, label));
 }
 
 /** First and last 4 chars of the hex key — enough to compare visually. */

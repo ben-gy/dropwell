@@ -5,16 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#050914" />
+    <meta name="theme-color" content="#05080f" />
 
-    <title>Dropwell — encrypted P2P file sharing</title>
+    <title>dropwell — encrypted p2p file drops</title>
     <meta
       name="description"
       content="Drop a file, get a link. End-to-end encrypted, peer-to-peer, no backend. Your file never touches a server."
     />
 
     <!-- Open Graph / social preview -->
-    <meta property="og:title" content="Dropwell — encrypted P2P file sharing" />
+    <meta property="og:title" content="dropwell — encrypted p2p file drops" />
     <meta
       property="og:description"
       content="Drop a file, get a link. End-to-end encrypted, peer-to-peer, no backend."
@@ -30,44 +30,73 @@
     <link rel="stylesheet" href="/src/styles/main.css" />
   </head>
   <body>
-    <div class="scanlines" aria-hidden="true"></div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <a class="brand" href="/">
+            <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+              <defs>
+                <linearGradient id="dw-grad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#4cc8ff" />
+                  <stop offset="100%" stop-color="#1d5dff" />
+                </linearGradient>
+              </defs>
+              <path
+                d="M16 4 Q25 13 25 19 A9 9 0 1 1 7 19 Q7 13 16 4 Z"
+                fill="url(#dw-grad)"
+                stroke="#9fe3ff"
+                stroke-width="1.2"
+              />
+              <circle cx="16" cy="20" r="2.5" fill="#05080f" />
+            </svg>
+            <span class="brand-name">
+              drop<span class="brand-name-accent">well</span>
+            </span>
+          </a>
+          <div class="topbar-meta" id="topbar-meta">
+            <span><span class="meta-key">v</span> <span class="meta-val">0.1</span></span>
+            <span><span class="meta-key">cipher</span> <span class="meta-val">aes-gcm-256</span></span>
+            <span><span class="meta-key">transport</span> <span class="meta-val">webrtc</span></span>
+            <span><span class="meta-key">backend</span> <span class="meta-val">none</span></span>
+          </div>
+        </div>
+        <nav class="topbar-nav">
+          <button type="button" class="nav-link" data-modal="tmpl-how-it-works">how it works</button>
+          <button type="button" class="nav-link" data-modal="tmpl-security">threat model</button>
+          <a
+            href="https://github.com/ben-gy/dropwell"
+            target="_blank"
+            rel="noopener noreferrer"
+            >source</a
+          >
+        </nav>
+      </header>
 
-    <header class="site-header">
-      <a class="brand" href="/">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-          <defs>
-            <linearGradient id="dw-grad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#4cc8ff" />
-              <stop offset="100%" stop-color="#1d5dff" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M16 4 Q25 13 25 19 A9 9 0 1 1 7 19 Q7 13 16 4 Z"
-            fill="url(#dw-grad)"
-            stroke="#9fe3ff"
-            stroke-width="1.2"
-          />
-          <circle cx="16" cy="20" r="2.5" fill="#050914" />
-        </svg>
-        <span class="brand-name">
-          drop<span class="brand-name-accent">well</span>
-        </span>
-      </a>
-      <nav class="site-nav">
-        <button type="button" class="nav-link" data-modal="tmpl-how-it-works">how it works</button>
-        <button type="button" class="nav-link" data-modal="tmpl-security">security</button>
-        <a
-          href="https://github.com/ben-gy/dropwell"
-          target="_blank"
-          rel="noopener noreferrer"
-          >source</a
-        >
-      </nav>
-    </header>
+      <div class="main-grid">
+        <main id="app">
+          <!-- main app region is populated by src/main.ts -->
+        </main>
+        <aside id="event-drawer">
+          <!-- event drawer is populated by src/eventlog.ts -->
+        </aside>
+      </div>
 
-    <main id="app">
-      <!-- main app region is populated by src/main.ts -->
-    </main>
+      <footer class="statusbar">
+        <div>
+          <span class="status-pill">
+            <span class="dot-mini idle" id="sb-status-dot"></span>
+            <span class="label" id="sb-status-label">idle</span>
+          </span>
+          <span id="sb-mode" class="status-pill"></span>
+        </div>
+        <div>
+          <span id="sb-peers"><span style="color:var(--fg-3)">peers</span> 0</span>
+          <span id="sb-trackers"><span style="color:var(--fg-3)">trackers</span> 0/0</span>
+          <span id="sb-throughput"><span style="color:var(--fg-3)">throughput</span> —</span>
+          <span id="sb-clock"><span style="color:var(--fg-3)">t</span> 00:00</span>
+        </div>
+      </footer>
+    </div>
 
     <template id="tmpl-how-it-works">
       <div class="modal-content">
@@ -173,18 +202,6 @@
         </div>
       </div>
     </template>
-
-    <footer class="site-footer">
-      <p>
-        dropwell · zero backend · zero tracking ·
-        <a
-          href="https://github.com/ben-gy/dropwell"
-          target="_blank"
-          rel="noopener noreferrer"
-          >github</a
-        >
-      </p>
-    </footer>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
