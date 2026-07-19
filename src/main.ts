@@ -8,6 +8,11 @@
  * route through the central event log.
  */
 
+// feedback:begin (managed by hub/scripts/feedback/backfill.mjs)
+import { mountFeedback } from './feedback';
+mountFeedback();
+// feedback:end
+
 import './styles/main.css';
 import { generateKey, importKey, encryptFile, decryptBlob } from './crypto';
 import {
